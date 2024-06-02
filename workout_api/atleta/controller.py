@@ -1,6 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 from fastapi import APIRouter, Body, HTTPException, status
+from fastapi_pagination import Page, add_pagination, paginate
 from pydantic import UUID4
 
 from workout_api.atleta.schemas import AtletaIn, AtletaOut, AtletaUpdate
@@ -10,6 +11,7 @@ from workout_api.centro_treinamento.models import CentroTreinamentoModel
 
 from workout_api.contrib.dependencies import DatabaseDependency
 from sqlalchemy.future import select
+from sqlalchemy import exec
 
 router = APIRouter()
 
@@ -54,6 +56,11 @@ async def post(
         
         db_session.add(atleta_model)
         await db_session.commit()
+    except exc.IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f'Já existe um atleta cadastrado com o cpf informado: {atleta_in.cpf}'
+        )
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
@@ -72,7 +79,7 @@ async def post(
 async def query(db_session: DatabaseDependency) -> list[AtletaOut]:
     atletas: list[AtletaOut] = (await db_session.execute(select(AtletaModel))).scalars().all()
     
-    return [AtletaOut.model_validate(atleta) for atleta in atletas]
+    return paginate([AtletaOut.model_validate(atleta) for atleta in atletas])
 
 
 @router.get(
@@ -93,6 +100,34 @@ async def get(id: UUID4, db_session: DatabaseDependency) -> AtletaOut:
         )
     
     return atleta
+
+@router.get(
+    '/atleta', 
+    summary='Consulta atletas por nome e CPF',
+    status_code=status.HTTP_200_OK,
+    response_model=list[AtletaOut],
+)
+async def get_atleta(
+    nome: str,
+    cpf:str,
+    db_session: DatabaseDependency
+) -> list[AtletaOut]:
+    query = select(AtletaModel)
+    
+    if nome:
+        query = query.filter(AtletaModel.nome == nome)
+    if cpf:
+        query = query.filter(AtletaModel.cpf == cpf)
+
+    atletas = (await db_session.execute(query)).scalars().all()
+
+    if not atletas:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail='Nenhum atleta encontrado com os critérios fornecidos'
+        )
+    
+    return atletas
 
 
 @router.patch(
